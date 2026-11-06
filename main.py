@@ -3,7 +3,8 @@ import argparse
 import numpy as np
 from scipy.fft import fft, fftfreq
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
+from matplotlib.patches import Circle
+from matplotlib.widgets import Button, CheckButtons, Slider
 from drawFigure import draw_shape
 
 
@@ -129,6 +130,156 @@ def quick_render() -> None:
     plt.show()
 
 
+def animate_shape() -> None:
+    samples = draw_shape()
+    if samples is None:
+        return
+
+    sample_count = samples.size
+    initial_n = min(20, sample_count)
+    epicycles = generate_epicycles(samples, initial_n)
+    frame_position = 0.0
+    playing = True
+    looping = False
+    trace: list[complex] = []
+
+    figure, axes = plt.subplots()
+    figure.subplots_adjust(bottom=0.28)
+    axes.plot(samples.real, samples.imag, color="0.85", label="Drawn shape")
+    trace_line, = axes.plot([], [], color="tab:blue", label="Trace")
+    axes.set_aspect("equal", adjustable="datalim")
+    axes.set_title("Fourier epicycles")
+    axes.legend()
+
+    extent = max(
+        float(np.max(np.abs(samples.real))),
+        float(np.max(np.abs(samples.imag))),
+        float(np.sum(epicycles["magnitude"])),
+        1.0,
+    )
+    padding = extent * 0.1
+    axes.set_xlim(-extent - padding, extent + padding)
+    axes.set_ylim(-extent - padding, extent + padding)
+
+    circle_artists: list[Circle] = []
+    vector_artists = []
+
+    def configure_epicycles(new_n: int) -> None:
+        nonlocal epicycles
+        for artist in circle_artists + vector_artists:
+            artist.remove()
+        circle_artists.clear()
+        vector_artists.clear()
+        epicycles = generate_epicycles(samples, new_n)
+        colors = plt.cm.viridis(np.linspace(0.1, 0.9, new_n))
+        for epicycle, color in zip(epicycles, colors):
+            circle = Circle((0, 0), epicycle["magnitude"], color=color,
+                            fill=False, alpha=0.45)
+            vector, = axes.plot([], [], color=color, linewidth=1)
+            axes.add_patch(circle)
+            circle_artists.append(circle)
+            vector_artists.append(vector)
+        axes.set_title(f"Fourier epicycles ({new_n})")
+
+    def render_frame(frame: int) -> None:
+        time = frame / sample_count
+        endpoint = 0j
+        for epicycle, circle, vector in zip(
+            epicycles, circle_artists, vector_artists
+        ):
+            start = endpoint
+            endpoint += epicycle["magnitude"] * np.exp(
+                1j * (
+                    2 * np.pi * epicycle["frequency"] * time
+                    + epicycle["phase"]
+                )
+            )
+            circle.center = (start.real, start.imag)
+            vector.set_data(
+                [start.real, endpoint.real],
+                [start.imag, endpoint.imag],
+            )
+        trace.append(endpoint)
+        trace_array = np.asarray(trace, dtype=np.complex128)
+        trace_line.set_data(trace_array.real, trace_array.imag)
+        figure.canvas.draw_idle()
+
+    configure_epicycles(initial_n)
+    render_frame(0)
+
+    n_slider_axes = figure.add_axes((0.15, 0.12, 0.7, 0.04))
+    n_slider = Slider(
+        n_slider_axes,
+        "N",
+        valmin=1,
+        valmax=sample_count,
+        valinit=initial_n,
+        valstep=1,
+    )
+    speed_slider_axes = figure.add_axes((0.15, 0.06, 0.7, 0.04))
+    speed_slider = Slider(
+        speed_slider_axes,
+        "Speed",
+        valmin=0.1,
+        valmax=5.0,
+        valinit=1.0,
+    )
+    play_button_axes = figure.add_axes((0.02, 0.06, 0.1, 0.06))
+    play_button = Button(play_button_axes, "Pause")
+    loop_button_axes = figure.add_axes((0.86, 0.06, 0.12, 0.06))
+    loop_button = CheckButtons(loop_button_axes, ["Loop"], [False])
+    timer = figure.canvas.new_timer(interval=30)
+
+    def advance() -> None:
+        nonlocal frame_position, playing
+        frame_position += speed_slider.val
+        if frame_position >= sample_count:
+            if looping:
+                frame_position %= sample_count
+                trace.clear()
+            else:
+                frame_position = sample_count - 1
+                playing = False
+                timer.stop()
+                play_button.label.set_text("Play")
+        render_frame(int(frame_position))
+
+    def toggle_play(_event) -> None:
+        nonlocal playing
+        del _event
+        playing = not playing
+        if playing:
+            timer.start()
+            play_button.label.set_text("Pause")
+        else:
+            timer.stop()
+            play_button.label.set_text("Play")
+        figure.canvas.draw_idle()
+
+    def toggle_loop(_label) -> None:
+        nonlocal looping
+        del _label
+        looping = not looping
+
+    def update_n(value: float) -> None:
+        nonlocal frame_position
+        was_playing = playing
+        timer.stop()
+        frame_position = 0.0
+        trace.clear()
+        configure_epicycles(int(value))
+        render_frame(0)
+        if was_playing:
+            timer.start()
+
+    timer.add_callback(advance)
+    play_button.on_clicked(toggle_play)
+    loop_button.on_clicked(toggle_loop)
+    n_slider.on_changed(update_n)
+    timer.start()
+    plt.show()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -143,7 +294,7 @@ def main() -> None:
         quick_render()
         return
 
-    # Animation will be implemented here.
+    animate_shape()
 
 
 if __name__ == "__main__":
