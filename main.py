@@ -65,6 +65,8 @@ def generate_epicycles(shape: np.ndarray, n: int) -> np.ndarray:
 
 def recreate_shape(shape: np.ndarray, n: int) -> np.ndarray:
     """Recreate a shape from its ``n`` strongest epicycles."""
+    if n == 0:
+        return np.zeros_like(shape, dtype=np.complex128)
     epicycles = generate_epicycles(shape, n)
     sample_times = np.arange(shape.size, dtype=float) / shape.size
     return np.sum(
@@ -86,12 +88,27 @@ def quick_render() -> None:
     if samples is None:
         return
 
-    maximum_n = samples.size
+    maximum_n = min(100, samples.size)
     initial_n = min(20, maximum_n)
     reconstructed = recreate_shape(samples, initial_n)
 
-    figure, axes = plt.subplots()
-    figure.subplots_adjust(bottom=0.2)
+    coefficients = fft(samples) / samples.size
+    frequencies = (fftfreq(samples.size) * samples.size).astype(int)
+    analysis_n = np.arange(maximum_n + 1)
+    rmse = np.array(
+        [
+            np.sqrt(np.mean(np.abs(samples - recreate_shape(samples, n)) ** 2))
+            for n in analysis_n
+        ]
+    )
+    plotted_rmse = np.maximum(rmse, np.finfo(float).tiny)
+
+    figure = plt.figure(figsize=(12, 8))
+    grid = figure.add_gridspec(2, 2, height_ratios=(2, 1))
+    axes = figure.add_subplot(grid[0, :])
+    error_axes = figure.add_subplot(grid[1, 0])
+    spectrum_axes = figure.add_subplot(grid[1, 1])
+    figure.subplots_adjust(bottom=0.2, hspace=0.35)
     axes.plot(
         samples.real,
         samples.imag,
@@ -102,17 +119,60 @@ def quick_render() -> None:
         reconstructed.real,
         reconstructed.imag,
         color="tab:blue",
-        label=f"Recreated ({initial_n} epicycles)",
+        label=f"Recreated ({initial_n})",
     )
     axes.set_aspect("equal", adjustable="datalim")
-    axes.set_title("Fourier epicycle reconstruction")
+    axes.set_title(f"Fourier epicycle reconstruction ({initial_n})")
     axes.legend()
+
+    error_axes.plot(analysis_n, plotted_rmse, color="tab:red")
+    error_marker, = error_axes.plot(
+        initial_n,
+        plotted_rmse[initial_n],
+        "o",
+        color="black",
+        label=f"N = {initial_n}",
+    )
+    error_axes.set_title("RMSE by number of epicycles")
+    error_axes.set_xlabel("N")
+    error_axes.set_ylabel("RMSE")
+    error_axes.set_yscale("log")
+    error_axes.legend()
+
+    order = np.argsort(frequencies)
+    spectrum_stems = spectrum_axes.stem(
+        frequencies[order],
+        np.maximum(np.abs(coefficients[order]), np.finfo(float).tiny),
+        linefmt="-",
+        markerfmt=".",
+        basefmt=" ",
+        label="All coefficients",
+    )
+    spectrum_stems.stemlines.set_color("0.7")
+    included = generate_epicycles(samples, initial_n)
+    included_frequencies = included["frequency"].astype(int)
+    included_mask = np.isin(frequencies, included_frequencies)
+    included_scatter = spectrum_axes.scatter(
+        frequencies[included_mask],
+        np.maximum(
+            np.abs(coefficients[included_mask]),
+            np.finfo(float).tiny,
+        ),
+        color="tab:orange",
+        zorder=3,
+        label="Included",
+    )
+    spectrum_axes.set_title("Complex Fourier spectrum")
+    spectrum_axes.set_xlabel("Signed frequency")
+    spectrum_axes.set_ylabel(r"$|c_n|$")
+    spectrum_axes.set_yscale("log")
+    spectrum_axes.legend()
 
     slider_axes = figure.add_axes((0.15, 0.06, 0.7, 0.04))
     n_slider = Slider(
         slider_axes,
         "N",
-        valmin=1,
+        valmin=0,
         valmax=maximum_n,
         valinit=initial_n,
         valstep=1,
@@ -122,8 +182,28 @@ def quick_render() -> None:
         n = int(value)
         recreated = recreate_shape(samples, n)
         reconstructed_line.set_data(recreated.real, recreated.imag)
-        reconstructed_line.set_label(f"Recreated ({n} epicycles)")
+        reconstructed_line.set_label(f"Recreated ({n})")
+        axes.set_title(f"Fourier epicycle reconstruction ({n})")
         axes.legend()
+        error_marker.set_data([n], [plotted_rmse[n]])
+        error_marker.set_label(f"N = {n}")
+        error_axes.legend()
+        selected = generate_epicycles(samples, n) if n else np.empty(
+            0, dtype=EPICYCLE_DTYPE
+        )
+        selected_frequencies = selected["frequency"].astype(int)
+        selected_mask = np.isin(frequencies, selected_frequencies)
+        included_scatter.set_offsets(
+            np.column_stack(
+                (
+                    frequencies[selected_mask],
+                    np.maximum(
+                        np.abs(coefficients[selected_mask]),
+                        np.finfo(float).tiny,
+                    ),
+                )
+            )
+        )
         figure.canvas.draw_idle()
 
     n_slider.on_changed(update)
@@ -136,15 +216,33 @@ def animate_shape() -> None:
         return
 
     sample_count = samples.size
-    initial_n = min(20, sample_count)
+    maximum_n = min(100, sample_count)
+    initial_n = min(20, maximum_n)
     epicycles = generate_epicycles(samples, initial_n)
     frame_position = 0.0
     playing = True
     looping = False
     trace: list[complex] = []
 
-    figure, axes = plt.subplots()
-    figure.subplots_adjust(bottom=0.28)
+    coefficients = fft(samples) / samples.size
+    frequencies = (fftfreq(sample_count) * sample_count).astype(int)
+    analysis_n = np.arange(maximum_n + 1)
+    rmse = np.array(
+        [
+            np.sqrt(
+                np.mean(np.abs(samples - recreate_shape(samples, n)) ** 2)
+            )
+            for n in analysis_n
+        ]
+    )
+    plotted_rmse = np.maximum(rmse, np.finfo(float).tiny)
+
+    figure = plt.figure(figsize=(12, 9))
+    grid = figure.add_gridspec(2, 2, height_ratios=(2, 1))
+    axes = figure.add_subplot(grid[0, :])
+    error_axes = figure.add_subplot(grid[1, 0])
+    spectrum_axes = figure.add_subplot(grid[1, 1])
+    figure.subplots_adjust(bottom=0.27, hspace=0.4)
     axes.plot(samples.real, samples.imag, color="0.85", label="Drawn shape")
     trace_line, = axes.plot([], [], color="tab:blue", label="Trace")
     axes.set_aspect("equal", adjustable="datalim")
@@ -160,6 +258,49 @@ def animate_shape() -> None:
     padding = extent * 0.1
     axes.set_xlim(-extent - padding, extent + padding)
     axes.set_ylim(-extent - padding, extent + padding)
+
+    error_axes.plot(analysis_n, plotted_rmse, color="tab:red")
+    error_marker, = error_axes.plot(
+        initial_n,
+        plotted_rmse[initial_n],
+        "o",
+        color="black",
+        label=f"N = {initial_n}",
+    )
+    error_axes.set_title("RMSE by number of epicycles")
+    error_axes.set_xlabel("N")
+    error_axes.set_ylabel("RMSE")
+    error_axes.set_yscale("log")
+    error_axes.legend()
+
+    order = np.argsort(frequencies)
+    spectrum_stems = spectrum_axes.stem(
+        frequencies[order],
+        np.maximum(np.abs(coefficients[order]), np.finfo(float).tiny),
+        linefmt="-",
+        markerfmt=".",
+        basefmt=" ",
+        label="All coefficients",
+    )
+    spectrum_stems.stemlines.set_color("0.7")
+    included = generate_epicycles(samples, initial_n)
+    included_frequencies = included["frequency"].astype(int)
+    included_mask = np.isin(frequencies, included_frequencies)
+    included_scatter = spectrum_axes.scatter(
+        frequencies[included_mask],
+        np.maximum(
+            np.abs(coefficients[included_mask]),
+            np.finfo(float).tiny,
+        ),
+        color="tab:orange",
+        zorder=3,
+        label="Included",
+    )
+    spectrum_axes.set_title("Complex Fourier spectrum")
+    spectrum_axes.set_xlabel("Signed frequency")
+    spectrum_axes.set_ylabel(r"$|c_n|$")
+    spectrum_axes.set_yscale("log")
+    spectrum_axes.legend()
 
     circle_artists: list[Circle] = []
     vector_artists = []
@@ -212,7 +353,7 @@ def animate_shape() -> None:
         n_slider_axes,
         "N",
         valmin=1,
-        valmax=sample_count,
+        valmax=maximum_n,
         valinit=initial_n,
         valstep=1,
     )
@@ -263,12 +404,31 @@ def animate_shape() -> None:
 
     def update_n(value: float) -> None:
         nonlocal frame_position
+        n = int(value)
         was_playing = playing
         timer.stop()
         frame_position = 0.0
         trace.clear()
-        configure_epicycles(int(value))
+        configure_epicycles(n)
         render_frame(0)
+        axes.set_title(f"Fourier epicycles ({n})")
+        error_marker.set_data([n], [plotted_rmse[n]])
+        error_marker.set_label(f"N = {n}")
+        error_axes.legend()
+        selected = generate_epicycles(samples, n)
+        selected_frequencies = selected["frequency"].astype(int)
+        selected_mask = np.isin(frequencies, selected_frequencies)
+        included_scatter.set_offsets(
+            np.column_stack(
+                (
+                    frequencies[selected_mask],
+                    np.maximum(
+                        np.abs(coefficients[selected_mask]),
+                        np.finfo(float).tiny,
+                    ),
+                )
+            )
+        )
         if was_playing:
             timer.start()
 
