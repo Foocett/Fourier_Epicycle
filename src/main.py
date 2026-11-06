@@ -5,7 +5,7 @@ from scipy.fft import fft, fftfreq
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from matplotlib.widgets import Button, CheckButtons, Slider
-from drawFigure import draw_shape
+from src.drawFigure import draw_shape
 
 
 EPICYCLE_DTYPE = np.dtype(
